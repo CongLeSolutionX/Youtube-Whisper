@@ -1,92 +1,152 @@
 import os
-import whisper
-import gradio as gr
-from download_video import download_mp3_yt_dlp 
-
+import re
 import warnings
-warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
+import gradio as gr
+import whisper
+from download_video import download_mp3_yt_dlp
 
-# Function to download the audio, title, and thumbnail from YouTube
-def download_video_info(url):
+# Suppress specific warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# Global model cache
+models = {}
+
+def is_valid_youtube_url(url):
+    """
+    Validates whether the provided URL is a valid YouTube link.
+    """
+    youtube_regex = (
+        r"^(https?://)?(www\.)?(youtube\.com|youtu\.?be)/.+$"
+    )
+    return re.match(youtube_regex, url) is not None
+
+def download_video_info(youtube_url):
+    """
+    Downloads audio from the YouTube URL and retrieves video information.
+
+    Parameters:
+    - youtube_url (str): The URL of the YouTube video.
+
+    Returns:
+    - audio_path (str): Path to the downloaded audio file.
+    - title (str): Title of the YouTube video.
+    - thumbnail_url (str): URL of the video thumbnail.
+    - error_message (str): Error message if any issues occur.
+    """
+    if not is_valid_youtube_url(youtube_url):
+        return None, "Invalid YouTube URL.", None
+
     try:
-        # Call the function to download video and get title, thumbnail
-        title, thumbnail_url = download_mp3_yt_dlp(url)
-        audio_file = "downloaded_video.mp3"  # Path to the downloaded audio (MP3)
-
-        return audio_file, title, thumbnail_url
+        audio_path, title, thumbnail_url = download_mp3_yt_dlp(youtube_url)
+        if not audio_path:
+            return None, "Failed to download audio.", None
+        return audio_path, title, thumbnail_url
     except Exception as e:
-        return None, None, None, str(e)
+        print(f"Error downloading video info: {e}")
+        return None, "An error occurred while downloading the video.", None
 
-# Function to transcribe the downloaded audio using Whisper
-def transcribe_audio(audio_path, model_size="base", language="en"):
-    model = whisper.load_model(model_size)
-    result = model.transcribe(audio_path, language=language)
-    return result['text']
+def transcribe_audio(audio_path, model_size="base", language=None):
+    """
+    Transcribes the audio file using the specified Whisper model.
 
-# Split logic: First fetch title and thumbnail, then transcribe
-def get_video_info_and_transcribe(youtube_url, model_size="base", language="en"):
-    # Fetch title and thumbnail first
+    Parameters:
+    - audio_path (str): Path to the audio file.
+    - model_size (str): Size of the Whisper model to use.
+    - language (str): Language code for transcription.
+
+    Returns:
+    - transcription (str): The transcribed text.
+    """
+    try:
+        if model_size not in models:
+            models[model_size] = whisper.load_model(model_size)
+        model = models[model_size]
+
+        options = {}
+        if language:
+            options['language'] = language
+
+        result = model.transcribe(audio_path, **options)
+        return result['text']
+    except Exception as e:
+        print(f"Error during transcription: {e}")
+        return "An error occurred during transcription."
+def get_video_info_and_transcribe(youtube_url, model_size="base", language=None, progress=gr.Progress()):
+    """
+    Fetches video info and transcribes audio, updating progress.
+    """
+    progress(0, "Validating URL...")
     audio_path, title, thumbnail_url = download_video_info(youtube_url)
-    
-    # If fetching video info fails
-    if not audio_path or not os.path.exists(audio_path):
-        return gr.update(value="Error fetching video."), None, None
+    if not audio_path:
+        return title, None, "", None
 
-    # Show title and thumbnail to the user while the transcription is happening
-    title_output = gr.update(value=title)
-    
-    # Show the thumbnail if available
-    if thumbnail_url:
-        thumbnail_output = gr.update(value=thumbnail_url)
-    else:
-        thumbnail_output = gr.update(visible=False)  # Hide if no thumbnail
-    
-    # Start transcription
+    progress(50, "Transcribing audio...")
     transcription = transcribe_audio(audio_path, model_size, language)
 
-    return title_output, thumbnail_output, gr.update(value=transcription)
+    # Save transcription to a file for download
+    transcription_file = "transcription.txt"
+    with open(transcription_file, "w", encoding="utf-8") as f:
+        f.write(transcription)
 
-# Gradio interface setup using gradio.components
-with gr.Blocks() as demo:
+    # Clean up downloaded audio file
+    if os.path.exists(audio_path):
+        os.remove(audio_path)
 
-    title = "<center><h1>YouTube Whisper ⚡️ </h1></center>"
-    gr.HTML(title)
+    progress(100, "Done")
+    return title, thumbnail_url, transcription, transcription_file
 
-    gr.Markdown(
-    """
-    This tool lets you transcribe YouTube videos in multiple languages using **[Whisper](https://openai.com/research/whisper)**, an open-source speech recognition (ASR) model developed by OpenAI.
-
-
-    ### Key Features:
-    - **Fast transcription**: Using the **base** model, transcribing a **3 minute** video takes approximately **30 seconds**.
-    - **Multiple language support**: Choose from **English**, **Spanish**, **French**, **Vietnamese**, and more!
-    - **Simple workflow**: 
-        1. Paste a YouTube link.
-        2. Select the model size and language.
-        3. Click "Transcribe" to get the text from the video.
-
-    _Transcription times may vary based on model size and video length._
-    """)
+with gr.Blocks() as app:
+    gr.Markdown("# YouTube Video Transcriber")
+    gr.Markdown("Transcribe YouTube videos using OpenAI's Whisper model.")
 
     with gr.Row():
-        youtube_url = gr.Textbox(label="YouTube Link", elem_id="yt_link", scale=5)
-        model_size = gr.Dropdown(choices=["tiny", "base", "small", "medium", "large"], label="Model Size", value="base", scale=1)
-        language = gr.Dropdown(choices=["en", "es", "fr", "de", "it", "ja", "vi"], label="Language", value="en", scale=1)
-    
-    title_output = gr.Textbox(label="Video Title", interactive=False)
+        youtube_url = gr.Textbox(
+            label="YouTube URL",
+            placeholder="Enter the YouTube video URL here",
+            info="Supports standard YouTube links (e.g., https://www.youtube.com/watch?v=VIDEO_ID)."
+        )
 
     with gr.Row():
-        thumbnail_output = gr.Image(label="Thumbnail", interactive=False, scale=1)
-        transcription_output = gr.Textbox(label="Transcription", interactive=False, scale=1)
-    
+        model_size = gr.Dropdown(
+            choices=["tiny", "base", "small", "medium", "large"],
+            value="base",
+            label="Model Size",
+            info="Select the Whisper model size. Larger models are more accurate but require more resources."
+        )
+        language = gr.Textbox(
+            label="Language (Optional)",
+            placeholder="e.g., 'en' for English",
+            info="Specify the language code. Leave empty for auto-detection."
+        )
+
     transcribe_button = gr.Button("Transcribe")
 
-    transcribe_button.click(
-        get_video_info_and_transcribe, 
-        inputs=[youtube_url, model_size, language],
-        outputs=[title_output, thumbnail_output, transcription_output]
+    with gr.Row():
+        title_output = gr.Textbox(
+            label="Video Title",
+            interactive=False
+        )
+
+    thumbnail_output = gr.Image(
+        label="Thumbnail",
+        interactive=False
     )
 
-# Launch the app
+    transcription_output = gr.Textbox(
+        label="Transcription",
+        lines=10,
+        max_lines=30,
+        interactive=False
+    )
+
+    download_button = gr.File(label="Download Transcription")
+
+    transcribe_button.click(
+        fn=get_video_info_and_transcribe,
+        inputs=[youtube_url, model_size, language],
+        outputs=[title_output, thumbnail_output, transcription_output, download_button]
+    )
+
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    app.launch(server_name="0.0.0.0", server_port=7860)
