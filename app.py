@@ -59,7 +59,7 @@ with gr.Blocks() as demo:
 
     ### Key Features:
     - **Fast transcription**: Using the **base** model, transcribing a **3 minute** video takes approximately **30 seconds**.
-    - **Multiple language support**: Choose from **English**, **Spanish**, **French**, and more!
+    - **Multiple language support**: Choose from **English**, **Spanish**, **French**, **Vietnamese**, and more!
     - **Simple workflow**: 
         1. Paste a YouTube link.
         2. Select the model size and language.
@@ -71,7 +71,7 @@ with gr.Blocks() as demo:
     with gr.Row():
         youtube_url = gr.Textbox(label="YouTube Link", elem_id="yt_link", scale=5)
         model_size = gr.Dropdown(choices=["tiny", "base", "small", "medium", "large"], label="Model Size", value="base", scale=1)
-        language = gr.Dropdown(choices=["en", "es", "fr", "de", "it", "ja"], label="Language", value="en", scale=1)
+        language = gr.Dropdown(choices=["en", "es", "fr", "de", "it", "ja", "vi"], label="Language", value="en", scale=1)
     
     title_output = gr.Textbox(label="Video Title", interactive=False)
 
